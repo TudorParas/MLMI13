@@ -19,51 +19,33 @@ class NaiveBayesClassifier(object):
         self.smoothing = smoothing
         logger.info("Created Naive Bayes classifer with: models={0}, smoothing={1}".format(self.models, self.smoothing))
 
-    def count_occurences(self, file_list):
-        """
-        Count the occurences of n_grams
-        :param file_list: list of str representing the content of files
-        :return: Dictionary of frequencies mapping str->int (word->word count)
-        """
+    def count_word_occ(self, file_list):
         occurence_dict = dict()
         for model in self.models:
-            logger.info("Counting occurences for model with n={0}, cutoff={1}".format(model[0], model[1]))
-            model_occurence_dict = dict()
+            tmp_occ_dict = dict()
             for file in file_list:
                 words = du.get_words(file)
+                ngrams = du.generate_n_grams(words, model[0])
+                for ngram in ngrams:
+                    tmp_occ_dict[ngram] = tmp_occ_dict.get(ngram, 0) + 1
 
-                n_grams = du.generate_n_grams(words, model[0])
-                for n_gram in n_grams:
-                    model_occurence_dict[n_gram] = model_occurence_dict.get(n_gram, 0) + 1
-
-            model_occurence_dict = self.cutoff_infrequent_ngrams(model_occurence_dict, model[1])
-            for key in model_occurence_dict.keys():
-                occurence_dict[key] = occurence_dict.get(key, 0) + model_occurence_dict[key]
-
+            # Cutoff
+            cutoff = model[1]
+            for ngram, count in tmp_occ_dict.items():
+                if count >= cutoff:
+                    occurence_dict[ngram] = occurence_dict.get(ngram, 0) + count
         return occurence_dict
 
-    def cutoff_infrequent_ngrams(self, ngrams, cutoff):
-        return {ngram: count for ngram, count in ngrams.items() if cutoff <= count}
+    def create_log_freqs(self, occurences):
+        self.word_freq = dict()
+        for cat, cat_occs in occurences.items():
+            cat_freq = dict()
+            for word, count in cat_occs.items():
+                cat_freq[word] = np.log(count + self.smoothing) - np.log(
+                    self.total_word_counts[cat] + self.smoothing * self.vocab_size)
+            self.word_freq[cat] = cat_freq
 
-    def compute_total_word_counts(self, occurences):
-        self.total_word_counts = {category: sum(word_occurences.values()) for category, word_occurences in
-                                  occurences.items()}
-
-    def compute_log_frequencies(self, occurences):
-        """
-        Compute frequencies from occurence counts.
-        """
-        self.frequency_dict = dict()
-        for category, word_occurences in occurences.items():
-            category_log_freq_dict = dict()
-            for key in word_occurences.keys():
-                value = np.log(
-                    (word_occurences[key] + self.smoothing) / (
-                            self.total_word_counts[category] + self.vocab_size * self.smoothing))
-                category_log_freq_dict[key] = value
-            self.frequency_dict[category] = category_log_freq_dict
-
-    def train_naive_bayes(self, training_data):
+    def train(self, training_data):
         """
         Compute the naive bayes on the training data
         :param training_data: dict of category->list of str
@@ -71,15 +53,14 @@ class NaiveBayesClassifier(object):
         total_docs = sum([len(files) for files in training_data.values()])
         self.priors = {category: np.log(len(files) / total_docs) for category, files in training_data.items()}
 
-        occurences = {category: self.count_occurences(files) for category, files in training_data.items()}
-
+        occurences = {cat: self.count_word_occ(file_list) for cat, file_list in training_data.items()}
+        self.total_word_counts = {cat: sum([count for count in occs.values()]) for cat, occs in occurences.items()}
         self.vocab = set()
-        for category, word_occurences in occurences.items():
-            self.vocab.update(word_occurences.keys())
-        self.vocab_size = len(self.vocab)
-        logger.info("Computed vocab size {}".format(self.vocab_size))
-        self.compute_total_word_counts(occurences)
-        self.compute_log_frequencies(occurences)
+        for cat_occ in occurences.values():
+            self.vocab.update(cat_occ.keys())
+        self.vocab_size = len(self.vocab)\
+
+        self.create_log_freqs(occurences)
 
     def predict_file(self, file):
         words = du.get_words(file)
@@ -92,7 +73,7 @@ class NaiveBayesClassifier(object):
         for ngram in ngrams:
             if self.smoothing > 0:
                 for category in scores.keys():
-                    scores[category] += self.frequency_dict[category].get(
+                    scores[category] += self.word_freq[category].get(
                         ngram,
                         np.log(
                             self.smoothing) - np.log(
@@ -100,12 +81,12 @@ class NaiveBayesClassifier(object):
             else:
                 # Skip if not in all categories
                 in_all = True
-                for word_freq in self.frequency_dict.values():
-                    if ngram not in word_freq.keys():
+                for cat_freq in self.word_freq.values():
+                    if ngram not in cat_freq.keys():
                         in_all = False
                 if in_all:
                     for category in scores.keys():
-                        scores[category] += self.frequency_dict[category][ngram]
+                        scores[category] += self.word_freq[category][ngram]
 
         return 1 if scores['pos'] > scores['neg'] else 0
 

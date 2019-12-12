@@ -21,8 +21,7 @@ def combination(N, k):
 def sign_test(predictionsA, predictionsB, targets, q=0.5):
     a_better = np.sum((predictionsA == targets) * (predictionsB != targets))
     b_better = np.sum((predictionsA != targets) * (predictionsB == targets))
-    null = np.sum(
-        (predictionsA != targets) * (predictionsB != targets) + (predictionsA == targets) * (predictionsB == targets))
+    null = np.sum(predictionsA == predictionsB)
     assert (a_better + b_better + null == len(targets))
 
     N = 2 * (null // 2) + a_better + b_better
